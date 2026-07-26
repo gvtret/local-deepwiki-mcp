@@ -201,6 +201,56 @@ def _copy_local_tree(src: Path, dest: Path) -> None:
     shutil.copytree(src, dest, ignore=_COPY_IGNORE, symlinks=False)
 
 
+def _read_generation_progress(repo_path: Path) -> dict[str, Any] | None:
+    """Best-effort progress from deepwiki generation_status.json."""
+    status_path = repo_path / ".deepwiki" / "generation_status.json"
+    if not status_path.is_file():
+        return None
+    try:
+        data = json.loads(status_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    phase = data.get("phase") or ""
+    completed = data.get("completed")
+    total = data.get("total")
+    percent = data.get("percent")
+    eta = data.get("eta_minutes")
+    current = data.get("current_file") or ""
+    parts: list[str] = []
+    if phase:
+        parts.append(str(phase))
+    if completed is not None and total:
+        parts.append(f"{completed}/{total}")
+    if percent is not None:
+        try:
+            parts.append(f"{float(percent):.0f}%")
+        except (TypeError, ValueError):
+            pass
+    if eta is not None:
+        try:
+            eta_f = float(eta)
+            if eta_f >= 60:
+                parts.append(f"ETA ~{eta_f / 60:.1f}h")
+            else:
+                parts.append(f"ETA ~{eta_f:.0f}m")
+        except (TypeError, ValueError):
+            pass
+    if current:
+        parts.append(str(current)[-60:])
+    summary = " · ".join(parts) if parts else None
+    return {
+        "phase": phase,
+        "completed": completed,
+        "total": total,
+        "percent": percent,
+        "eta_minutes": eta,
+        "current_file": current,
+        "summary": summary,
+    }
+
+
 @dataclass
 class RepoManager:
     """Thread-safe registry of cloned/indexed repositories."""
@@ -229,7 +279,6 @@ class RepoManager:
             item.setdefault("source_type", "git")
             item.setdefault("source_path", None)
             item.setdefault("inplace", False)
-            # Drop unknown keys if upstream schema drifts
             known = {f.name for f in fields(RepoRecord)}
             filtered = {k: v for k, v in item.items() if k in known}
             rec = RepoRecord(**filtered)
@@ -251,6 +300,11 @@ class RepoManager:
                 d = r.to_dict()
                 d["has_wiki"] = r.wiki_path.is_dir() and (r.wiki_path / "index.md").exists()
                 d["display_source"] = r.display_source()
+                progress = _read_generation_progress(Path(r.path))
+                if progress:
+                    d["progress"] = progress
+                    if r.status in ("indexing", "cloning"):
+                        d["message"] = progress.get("summary") or r.message
                 out.append(d)
             return out
 
