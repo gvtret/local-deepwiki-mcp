@@ -10,7 +10,7 @@ embedding:
 llm:
   provider: "openai"
   openai:
-    model: "auto/best-coding"
+    model: "rag-local"
     base_url: "http://omniroute.misc-server/v1"
 
 parsing:
