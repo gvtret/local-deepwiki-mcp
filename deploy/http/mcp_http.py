@@ -376,7 +376,10 @@ async def ui_mcp_cursor_stdio_ssh() -> JSONResponse:
 
 class AddRepoBody(BaseModel):
     name: str = Field(..., min_length=1, max_length=64)
-    git_url: str = Field(..., min_length=1, max_length=2048)
+    git_url: str | None = Field(default=None, max_length=2048)
+    local_path: str | None = Field(default=None, max_length=4096)
+    # Index the local directory in place (do not copy into data/repos).
+    inplace: bool = False
 
 
 @app.get("/")
@@ -407,7 +410,12 @@ async def api_list_repos() -> JSONResponse:
 @app.post("/ui/api/repos")
 async def api_add_repo(body: AddRepoBody) -> JSONResponse:
     try:
-        rec = get_manager().add_repo(body.name.strip(), body.git_url.strip())
+        rec = get_manager().add_repo(
+            body.name.strip(),
+            git_url=(body.git_url or "").strip() or None,
+            local_path=(body.local_path or "").strip() or None,
+            inplace=body.inplace,
+        )
     except ValueError as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
     return JSONResponse({"ok": True, "repo": rec.to_dict()}, status_code=201)

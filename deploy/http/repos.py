@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -92,6 +92,12 @@ class RepoRecord:
     message: str = ""
     last_indexed_at: float | None = None
     wiki_port: int | None = None
+    # "git" | "local" — local uses a filesystem path on the Hub host
+    source_type: str = "git"
+    # Original absolute path when source_type=local (for refresh on reindex)
+    source_path: str | None = None
+    # True when indexing the source tree in place (do not delete on remove)
+    inplace: bool = False
 
     @property
     def wiki_path(self) -> Path:
@@ -99,6 +105,100 @@ class RepoRecord:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def display_source(self) -> str:
+        if self.source_type == "local":
+            return self.source_path or self.git_url or self.path
+        return self.git_url
+
+
+def _allowed_local_roots() -> list[Path]:
+    """Directories under which local_path may point (security allowlist)."""
+    roots: list[Path] = []
+    raw = os.environ.get("LOCAL_DEEPWIKI_LOCAL_ROOTS", "")
+    for part in raw.split(","):
+        part = part.strip()
+        if part:
+            roots.append(Path(part).expanduser().resolve())
+    # Sensible defaults for deploy@server layouts
+    for candidate in (
+        Path.home(),
+        _root(),
+        Path("/opt"),
+        Path("/home"),
+        Path("/var/lib"),
+        Path("/srv"),
+    ):
+        try:
+            roots.append(candidate.expanduser().resolve())
+        except OSError:
+            continue
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    out: list[Path] = []
+    for r in roots:
+        key = str(r)
+        if key not in seen:
+            seen.add(key)
+            out.append(r)
+    return out
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(root.resolve())
+    except (OSError, ValueError):
+        return False
+
+
+_COPY_IGNORE = shutil.ignore_patterns(
+    ".git",
+    ".deepwiki",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    "*.pyc",
+    ".tox",
+    ".mypy_cache",
+    ".ruff_cache",
+    "target",
+    "dist",
+    "build",
+    ".idea",
+    ".vscode",
+)
+
+
+def _validate_local_path(path_str: str) -> Path:
+    if not path_str or len(path_str) > 4096:
+        raise ValueError("local_path is required")
+    raw = Path(path_str).expanduser()
+    if not raw.is_absolute():
+        raise ValueError("local_path must be an absolute path on the server")
+    try:
+        path = raw.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise ValueError(f"local_path does not exist: {path_str}") from exc
+    if not path.is_dir():
+        raise ValueError("local_path must be a directory")
+    roots = _allowed_local_roots()
+    if not any(_is_under(path, root) for root in roots):
+        allowed = ", ".join(str(r) for r in roots[:8])
+        raise ValueError(
+            f"local_path must be under an allowed root ({allowed}). "
+            "Set LOCAL_DEEPWIKI_LOCAL_ROOTS to extend the list."
+        )
+    # Never point at Hub internals in a way that would recurse oddly
+    if path == repos_dir().resolve() or _is_under(path, repos_dir()):
+        raise ValueError("local_path must not be inside the Hub data/repos tree")
+    return path
+
+
+def _copy_local_tree(src: Path, dest: Path) -> None:
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(src, dest, ignore=_COPY_IGNORE, symlinks=False)
 
 
 @dataclass
@@ -125,7 +225,14 @@ class RepoManager:
             return
         repos: dict[str, RepoRecord] = {}
         for item in raw.get("repos", []):
-            rec = RepoRecord(**item)
+            item = dict(item)
+            item.setdefault("source_type", "git")
+            item.setdefault("source_path", None)
+            item.setdefault("inplace", False)
+            # Drop unknown keys if upstream schema drifts
+            known = {f.name for f in fields(RepoRecord)}
+            filtered = {k: v for k, v in item.items() if k in known}
+            rec = RepoRecord(**filtered)
             if rec.status in ("cloning", "indexing"):
                 rec.status = "error"
                 rec.message = "Interrupted by server restart"
@@ -143,6 +250,7 @@ class RepoManager:
             for r in sorted(self._repos.values(), key=lambda x: x.name):
                 d = r.to_dict()
                 d["has_wiki"] = r.wiki_path.is_dir() and (r.wiki_path / "index.md").exists()
+                d["display_source"] = r.display_source()
                 out.append(d)
             return out
 
@@ -167,16 +275,62 @@ class RepoManager:
         if parsed.scheme not in ("http", "https", "git"):
             raise ValueError("git_url must be http(s), git://, or git@…")
 
-    def add_repo(self, name: str, git_url: str) -> RepoRecord:
+    def add_repo(
+        self,
+        name: str,
+        git_url: str | None = None,
+        *,
+        local_path: str | None = None,
+        inplace: bool = False,
+    ) -> RepoRecord:
         self._validate_name(name)
-        self._validate_git_url(git_url.strip())
-        git_url = git_url.strip()
+        git_url = (git_url or "").strip() or None
+        local_path = (local_path or "").strip() or None
+        if bool(git_url) == bool(local_path):
+            raise ValueError("provide exactly one of git_url or local_path")
+
         with self._lock:
             if name in self._repos:
                 raise ValueError(f"repo already exists: {name}")
             dest = repos_dir() / name
             if dest.exists():
                 raise ValueError(f"directory already exists: {dest}")
+
+            if local_path:
+                src = _validate_local_path(local_path)
+                if inplace:
+                    rec = RepoRecord(
+                        name=name,
+                        git_url=str(src),
+                        path=str(src),
+                        created_at=time.time(),
+                        status="indexing",
+                        message="Indexing local path…",
+                        source_type="local",
+                        source_path=str(src),
+                        inplace=True,
+                    )
+                else:
+                    rec = RepoRecord(
+                        name=name,
+                        git_url=str(src),
+                        path=str(dest),
+                        created_at=time.time(),
+                        status="cloning",
+                        message="Copying local path…",
+                        source_type="local",
+                        source_path=str(src),
+                        inplace=False,
+                    )
+                self._repos[name] = rec
+                self.save()
+                threading.Thread(
+                    target=self._import_local_and_index, args=(name,), daemon=True
+                ).start()
+                return rec
+
+            assert git_url is not None
+            self._validate_git_url(git_url)
             rec = RepoRecord(
                 name=name,
                 git_url=git_url,
@@ -184,11 +338,42 @@ class RepoManager:
                 created_at=time.time(),
                 status="cloning",
                 message="Cloning…",
+                source_type="git",
             )
             self._repos[name] = rec
             self.save()
         threading.Thread(target=self._clone_and_index, args=(name,), daemon=True).start()
         return rec
+
+    def _import_local_and_index(self, name: str) -> None:
+        with self._lock:
+            rec = self._repos.get(name)
+            if rec is None:
+                return
+            dest = Path(rec.path)
+            src = Path(rec.source_path or "")
+            inplace = rec.inplace
+        try:
+            if not inplace:
+                if not src.is_dir():
+                    raise RuntimeError(f"source path missing: {src}")
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                _copy_local_tree(src, dest)
+            elif not dest.is_dir():
+                raise RuntimeError(f"local path missing: {dest}")
+            with self._lock:
+                rec = self._repos[name]
+                rec.status = "indexing"
+                rec.message = "Indexing…"
+                self.save()
+            self._run_index(name, full_rebuild=True)
+        except Exception as exc:  # noqa: BLE001 — boundary for background job
+            with self._lock:
+                rec = self._repos.get(name)
+                if rec:
+                    rec.status = "error"
+                    rec.message = str(exc)[:500]
+                    self.save()
 
     def _clone_and_index(self, name: str) -> None:
         with self._lock:
@@ -291,11 +476,48 @@ class RepoManager:
             rec.status = "indexing"
             rec.message = "Indexing…"
             self.save()
-        threading.Thread(
-            target=self._run_index, args=(name,), kwargs={"full_rebuild": full_rebuild}, daemon=True
-        ).start()
+            source_type = rec.source_type
+            inplace = rec.inplace
+            source_path = rec.source_path
+            dest = rec.path
+        if source_type == "local" and not inplace and source_path:
+            threading.Thread(
+                target=self._refresh_local_and_index,
+                args=(name, source_path, dest, full_rebuild),
+                daemon=True,
+            ).start()
+        else:
+            threading.Thread(
+                target=self._run_index,
+                args=(name,),
+                kwargs={"full_rebuild": full_rebuild},
+                daemon=True,
+            ).start()
         with self._lock:
             return self._repos[name]
+
+    def _refresh_local_and_index(
+        self, name: str, source_path: str, dest: str, full_rebuild: bool
+    ) -> None:
+        try:
+            src = Path(source_path)
+            if not src.is_dir():
+                raise RuntimeError(f"source path missing: {src}")
+            _copy_local_tree(src, Path(dest))
+            self._run_index(name, full_rebuild=full_rebuild)
+        except Exception as exc:  # noqa: BLE001
+            with self._lock:
+                rec = self._repos.get(name)
+                if rec:
+                    wiki_ok = (Path(rec.path) / ".deepwiki" / "index.md").exists()
+                    if wiki_ok:
+                        rec.status = "ready"
+                        rec.message = f"Ready (warnings): {str(exc)[:240]}"
+                        rec.last_indexed_at = time.time()
+                    else:
+                        rec.status = "error"
+                        rec.message = str(exc)[:500]
+                    self.save()
 
     def delete_repo(self, name: str) -> None:
         with self._lock:
@@ -305,7 +527,12 @@ class RepoManager:
             self._stop_wiki_locked(name)
             self.save()
             path = Path(rec.path)
-        if path.is_dir() and path.resolve().is_relative_to(repos_dir().resolve()):
+            inplace = rec.inplace
+            source_type = rec.source_type
+        # Never delete the user's original tree for inplace local sources.
+        if inplace or (source_type == "local" and not _is_under(path, repos_dir())):
+            return
+        if path.is_dir() and _is_under(path, repos_dir()):
             shutil.rmtree(path, ignore_errors=True)
 
     def _allocate_port_locked(self) -> int:

@@ -59,6 +59,28 @@
       margin-bottom: 0.9rem;
     }
     .row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    .source-tabs { display: flex; gap: 0.5rem; margin-bottom: 0.9rem; }
+    .source-tabs button {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid var(--border);
+      font-weight: 500;
+    }
+    .source-tabs button.active {
+      background: color-mix(in srgb, var(--accent) 22%, transparent);
+      color: var(--text);
+      border-color: var(--accent);
+    }
+    .hint { color: var(--muted); font-size: 0.8rem; margin: -0.5rem 0 0.9rem; }
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.9rem;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+    .check input { width: auto; margin: 0; }
     button, .btn {
       appearance: none;
       border: 0;
@@ -110,9 +132,28 @@
       <form id="add-form">
         <label for="name">Name</label>
         <input id="name" name="name" placeholder="my-project" required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" />
-        <label for="git_url">Git URL</label>
-        <input id="git_url" name="git_url" placeholder="https://github.com/org/repo.git" required />
-        <button type="submit">Clone &amp; index</button>
+
+        <div class="source-tabs" role="tablist">
+          <button type="button" class="active" data-source="git" id="tab-git">Git URL</button>
+          <button type="button" data-source="local" id="tab-local">Local folder</button>
+        </div>
+
+        <div id="git-fields">
+          <label for="git_url">Git URL</label>
+          <input id="git_url" name="git_url" placeholder="https://github.com/org/repo.git" />
+        </div>
+
+        <div id="local-fields" hidden>
+          <label for="local_path">Path on server</label>
+          <input id="local_path" name="local_path" placeholder="/home/deploy/src/my-project" />
+          <p class="hint">Absolute path visible to the Hub process (deploy user). By default the tree is copied into <code>data/repos/&lt;name&gt;</code>.</p>
+          <label class="check">
+            <input type="checkbox" id="inplace" name="inplace" />
+            Index in place (no copy; Delete won’t remove the folder)
+          </label>
+        </div>
+
+        <button type="submit" id="add-submit">Clone &amp; index</button>
       </form>
     </div>
 
@@ -138,7 +179,7 @@
               <div class="status {{ r.status }}">{{ r.status }}</div>
               <div class="msg">{{ r.message }}</div>
             </td>
-            <td class="msg">{{ r.git_url }}</td>
+            <td class="msg">{{ r.display_source or r.git_url }}</td>
             <td class="actions">
               {% if r.has_wiki %}
               <a class="btn" href="/r/{{ r.name }}/" target="_blank" rel="noopener">Open wiki</a>
@@ -156,6 +197,28 @@
   </main>
   <script>
     const flash = document.getElementById("flash");
+    let sourceMode = "git";
+
+    function setSourceMode(mode) {
+      sourceMode = mode;
+      document.getElementById("tab-git").classList.toggle("active", mode === "git");
+      document.getElementById("tab-local").classList.toggle("active", mode === "local");
+      document.getElementById("git-fields").hidden = mode !== "git";
+      document.getElementById("local-fields").hidden = mode !== "local";
+      document.getElementById("git_url").required = mode === "git";
+      document.getElementById("local_path").required = mode === "local";
+      document.getElementById("add-submit").textContent =
+        mode === "git" ? "Clone & index" : "Import & index";
+    }
+    document.getElementById("tab-git").onclick = () => setSourceMode("git");
+    document.getElementById("tab-local").onclick = () => setSourceMode("local");
+
+    function esc(s) {
+      return String(s || "").replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      })[c]);
+    }
+
     async function reloadTable() {
       const res = await fetch("/ui/api/repos");
       const data = await res.json();
@@ -164,20 +227,24 @@
         body.innerHTML = '<tr><td colspan="4" class="msg">No repositories yet.</td></tr>';
         return;
       }
-      body.innerHTML = data.repos.map(r => `
-        <tr data-name="${r.name}">
-          <td><strong>${r.name}</strong></td>
+      body.innerHTML = data.repos.map(r => {
+        const src = r.display_source || r.git_url || "";
+        const kind = r.source_type === "local" ? "local" : "git";
+        return `
+        <tr data-name="${esc(r.name)}">
+          <td><strong>${esc(r.name)}</strong><div class="msg">${kind}</div></td>
           <td>
-            <div class="status ${r.status}">${r.status}</div>
-            <div class="msg">${r.message || ""}</div>
+            <div class="status ${esc(r.status)}">${esc(r.status)}</div>
+            <div class="msg">${esc(r.message || "")}</div>
           </td>
-          <td class="msg">${r.git_url}</td>
+          <td class="msg">${esc(src)}</td>
           <td class="actions">
-            ${r.has_wiki ? `<a class="btn" href="/r/${r.name}/" target="_blank" rel="noopener">Open wiki</a>` : ""}
-            <button type="button" class="secondary" data-reindex="${r.name}">Reindex</button>
-            <button type="button" class="danger" data-delete="${r.name}">Delete</button>
+            ${r.has_wiki ? `<a class="btn" href="/r/${encodeURIComponent(r.name)}/" target="_blank" rel="noopener">Open wiki</a>` : ""}
+            <button type="button" class="secondary" data-reindex="${esc(r.name)}">Reindex</button>
+            <button type="button" class="danger" data-delete="${esc(r.name)}">Delete</button>
           </td>
-        </tr>`).join("");
+        </tr>`;
+      }).join("");
       bindActions();
     }
     function bindActions() {
@@ -207,11 +274,17 @@
       e.preventDefault();
       flash.textContent = "";
       const name = document.getElementById("name").value.trim();
-      const git_url = document.getElementById("git_url").value.trim();
+      const payload = { name };
+      if (sourceMode === "git") {
+        payload.git_url = document.getElementById("git_url").value.trim();
+      } else {
+        payload.local_path = document.getElementById("local_path").value.trim();
+        payload.inplace = document.getElementById("inplace").checked;
+      }
       const res = await fetch("/ui/api/repos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, git_url }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!data.ok) {
@@ -219,9 +292,11 @@
         return;
       }
       e.target.reset();
+      setSourceMode(sourceMode);
       await reloadTable();
     });
     document.getElementById("refresh").onclick = () => reloadTable();
+    setSourceMode("git");
     bindActions();
     setInterval(reloadTable, 5000);
   </script>

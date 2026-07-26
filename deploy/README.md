@@ -83,6 +83,24 @@ Drop-in: `/ui/mcp/cursor-stdio.json`
 
 Drop-in: `/ui/mcp/cursor-stdio-ssh.json`
 
+## Add repo: Git URL or local folder
+
+Hub UI (`/ui`) supports two sources:
+
+1. **Git URL** — shallow clone into `data/repos/<name>/`, then index.
+2. **Local folder** — absolute path on the **server** (visible to the `deploy` user):
+   - default: copy into `data/repos/<name>/` (safe Delete);
+   - **Index in place**: index the path itself; Delete only unregisters the repo.
+   - Reindex for copied locals re-syncs from the original path first.
+
+Allowlist (optional env `LOCAL_DEEPWIKI_LOCAL_ROOTS`): paths must resolve under `/home`, `/opt`, `/srv`, `/var/lib`, `$HOME`, or `LOCAL_DEEPWIKI_ROOT` by default.
+
+```bash
+curl -sS -X POST http://127.0.0.1:5555/ui/api/repos \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"my-src","local_path":"/home/deploy/src/my-src"}'
+```
+
 ## Verify
 
 ```bash
