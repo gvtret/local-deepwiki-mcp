@@ -47,6 +47,8 @@ dependencies = [
     "anthropic>=0.40,<1.0.0",  # Anthropic LLM provider
     "openai>=1.0,<2.0.0",  # OpenAI LLM provider
     "flask>=3.0,<4.0.0",  # Web UI server (used in quickstart)
+    # Direct pin so tool.uv.sources can force the CPU wheel (no nvidia CUDA deps).
+    "torch",
 ]
 
 [project.optional-dependencies]
@@ -190,3 +192,12 @@ disable_error_code = ["misc", "operator", "assignment", "arg-type"]
 dev = [
     "pytest-cov>=7.0.0",
 ]
+
+# CPU-only PyTorch: no nvidia-* CUDA wheels (server has no GPU).
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }

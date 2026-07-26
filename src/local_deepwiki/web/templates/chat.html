@@ -885,6 +885,14 @@
                     }),
                 });
 
+                if (!response.ok) {
+                    const errText = await response.text().catch(() => '');
+                    throw new Error(`Chat request failed (${response.status}): ${errText.slice(0, 200)}`);
+                }
+                if (!response.body) {
+                    throw new Error('Chat response body is empty (streaming unsupported)');
+                }
+
                 const reader = response.body.getReader();
                 const decoder = new TextDecoder();
                 let buffer = '';
@@ -900,55 +908,60 @@
                     for (const line of lines) {
                         if (!line.startsWith('data: ')) continue;
 
+                        let data;
                         try {
-                            const data = JSON.parse(line.slice(6));
+                            data = JSON.parse(line.slice(6));
+                        } catch (parseErr) {
+                            console.error('Error parsing SSE data:', parseErr, line);
+                            continue;
+                        }
 
-                            if (data.type === 'sources') {
-                                responseSources = data.sources;
-                            } else if (data.type === 'token') {
-                                // Remove typing indicator and create response element
-                                const typing = document.getElementById('typing-indicator');
-                                if (typing) typing.remove();
+                        if (data.type === 'sources') {
+                            responseSources = data.sources;
+                        } else if (data.type === 'token') {
+                            // Remove typing indicator and create response element
+                            const typing = document.getElementById('typing-indicator');
+                            if (typing) typing.remove();
 
-                                if (!currentResponseEl) {
-                                    currentResponseEl = document.createElement('div');
-                                    currentResponseEl.className = 'message assistant';
-                                    currentResponseEl.innerHTML = '<div class="message-content"></div>';
-                                    messagesEl.appendChild(currentResponseEl);
-                                }
-
-                                responseContent += data.content;
-                                currentResponseEl.querySelector('.message-content').innerHTML = renderMarkdown(responseContent);
-
-                                // Highlight code
-                                currentResponseEl.querySelectorAll('pre code').forEach(block => {
-                                    if (!block.dataset.highlighted) {
-                                        hljs.highlightElement(block);
-                                        block.dataset.highlighted = 'true';
-                                    }
-                                });
-
-                                scrollToBottom();
-                            } else if (data.type === 'progress') {
-                                updateProgress(data);
-                            } else if (data.type === 'result') {
-                                // Remove progress panel
-                                const progress = document.getElementById('progress-panel');
-                                if (progress) progress.remove();
-
-                                responseContent = data.answer;
-                                responseSources = data.sources;
-                                responseTrace = data.reasoning_trace;
-                            } else if (data.type === 'error') {
-                                throw new Error(data.message);
-                            } else if (data.type === 'done') {
-                                // Finalize response
-                                break;
+                            if (!currentResponseEl) {
+                                currentResponseEl = document.createElement('div');
+                                currentResponseEl.className = 'message assistant';
+                                currentResponseEl.innerHTML = '<div class="message-content"></div>';
+                                messagesEl.appendChild(currentResponseEl);
                             }
-                        } catch (e) {
-                            console.error('Error parsing SSE data:', e, line);
+
+                            responseContent += data.content;
+                            currentResponseEl.querySelector('.message-content').innerHTML = renderMarkdown(responseContent);
+
+                            // Highlight code
+                            currentResponseEl.querySelectorAll('pre code').forEach(block => {
+                                if (!block.dataset.highlighted) {
+                                    hljs.highlightElement(block);
+                                    block.dataset.highlighted = 'true';
+                                }
+                            });
+
+                            scrollToBottom();
+                        } else if (data.type === 'progress') {
+                            updateProgress(data);
+                        } else if (data.type === 'result') {
+                            // Remove progress panel
+                            const progress = document.getElementById('progress-panel');
+                            if (progress) progress.remove();
+
+                            responseContent = data.answer;
+                            responseSources = data.sources;
+                            responseTrace = data.reasoning_trace;
+                        } else if (data.type === 'error') {
+                            throw new Error(data.message || 'Chat error');
+                        } else if (data.type === 'done') {
+                            // Finalize response
+                            break;
                         }
                     }
+                }
+                if (!responseContent) {
+                    throw new Error('Model returned an empty answer. Try again.');
                 }
             } catch (e) {
                 console.error('Error:', e);

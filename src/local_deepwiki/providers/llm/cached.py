@@ -149,12 +149,26 @@ class CachingLLMProvider(LLMProvider):
             chunks.append(chunk)
             yield chunk
 
-        # Cache complete response
         complete_response = "".join(chunks)
-        await self._cache.set(
-            prompt=prompt,
-            response=complete_response,
-            system_prompt=system_prompt,
-            temperature=temperature,
-            model_name=self._provider.name,
-        )
+        # Reasoning-only models sometimes stream zero content; fall back once.
+        if not complete_response.strip():
+            logger.warning(
+                "Stream produced empty content; falling back to non-stream generate"
+            )
+            complete_response = await self._provider.generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            if complete_response:
+                yield complete_response
+
+        if complete_response.strip():
+            await self._cache.set(
+                prompt=prompt,
+                response=complete_response,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                model_name=self._provider.name,
+            )

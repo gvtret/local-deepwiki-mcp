@@ -235,8 +235,13 @@ class Config(BaseModel):
                 data = yaml.safe_load(f)
             return cls.model_validate(data)
 
-        # Check default locations
+        # Prefer explicit install root (systemd / Hub), then cwd, then XDG paths.
+        # Order matches ConfigValidator so `update` and `config show` agree.
+        root = os.environ.get("LOCAL_DEEPWIKI_ROOT")
         default_paths = [
+            *([Path(root) / "config.yaml"] if root else []),
+            Path.cwd() / "config.yaml",
+            Path.cwd() / ".local-deepwiki.yaml",
             Path.home() / ".config" / "local-deepwiki" / "config.yaml",
             Path.home() / ".local-deepwiki.yaml",
         ]

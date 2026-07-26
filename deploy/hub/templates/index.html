@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Local DeepWiki Hub</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --text: #e7ecf3;
+      --muted: #8b9bb4;
+      --accent: #3d9cf0;
+      --ok: #3ecf8e;
+      --warn: #e6a23c;
+      --err: #f07178;
+      --border: #2a3548;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1c3a5a 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #243049 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+    h1 {
+      font-family: "IBM Plex Serif", Georgia, serif;
+      font-weight: 600;
+      font-size: 2rem;
+      margin: 0 0 0.35rem;
+      letter-spacing: -0.02em;
+    }
+    .sub { color: var(--muted); margin-bottom: 2rem; }
+    .panel {
+      background: color-mix(in srgb, var(--panel) 88%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      margin-bottom: 1.25rem;
+      backdrop-filter: blur(8px);
+    }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 0.35rem; }
+    input {
+      width: 100%;
+      padding: 0.65rem 0.75rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0c1118;
+      color: var(--text);
+      margin-bottom: 0.9rem;
+    }
+    .row { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+    button, .btn {
+      appearance: none;
+      border: 0;
+      border-radius: 8px;
+      padding: 0.55rem 0.95rem;
+      background: var(--accent);
+      color: #061018;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      font-size: 0.9rem;
+    }
+    button.secondary, .btn.secondary {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+    button.danger { background: transparent; color: var(--err); border: 1px solid var(--err); }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 0.7rem 0.4rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+    th { color: var(--muted); font-weight: 500; font-size: 0.8rem; }
+    .status { font-size: 0.85rem; }
+    .status.ready { color: var(--ok); }
+    .status.indexing, .status.cloning { color: var(--warn); }
+    .status.error { color: var(--err); }
+    .msg { color: var(--muted); font-size: 0.8rem; max-width: 280px; word-break: break-word; }
+    .actions { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+    .links a { color: var(--accent); margin-right: 1rem; font-size: 0.9rem; }
+    #flash { margin-bottom: 1rem; color: var(--err); min-height: 1.2em; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Local DeepWiki</h1>
+    <p class="sub">Multi-repo hub · MCP on <code>/mcp</code> · v{{ version }}</p>
+
+    <div class="links panel">
+      <a href="/ui/mcp/cursor.json">Cursor HTTP config</a>
+      <a href="/ui/mcp/cursor-stdio.json">Cursor stdio config</a>
+      <a href="/ui/mcp/cursor-stdio-ssh.json">Cursor stdio SSH</a>
+      <a href="/health">/health</a>
+    </div>
+
+    <div class="panel">
+      <h2 style="margin-top:0;font-size:1.1rem;">Add repository</h2>
+      <div id="flash"></div>
+      <form id="add-form">
+        <label for="name">Name</label>
+        <input id="name" name="name" placeholder="my-project" required pattern="[A-Za-z0-9][A-Za-z0-9._-]{0,63}" />
+        <label for="git_url">Git URL</label>
+        <input id="git_url" name="git_url" placeholder="https://github.com/org/repo.git" required />
+        <button type="submit">Clone &amp; index</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+        <h2 style="margin:0;font-size:1.1rem;">Repositories</h2>
+        <button type="button" class="secondary" id="refresh">Refresh</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Status</th>
+            <th>Source</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="repo-body">
+          {% for r in repos %}
+          <tr data-name="{{ r.name }}">
+            <td><strong>{{ r.name }}</strong></td>
+            <td>
+              <div class="status {{ r.status }}">{{ r.status }}</div>
+              <div class="msg">{{ r.message }}</div>
+            </td>
+            <td class="msg">{{ r.git_url }}</td>
+            <td class="actions">
+              {% if r.has_wiki %}
+              <a class="btn" href="/r/{{ r.name }}/" target="_blank" rel="noopener">Open wiki</a>
+              {% endif %}
+              <button type="button" class="secondary" data-reindex="{{ r.name }}">Reindex</button>
+              <button type="button" class="danger" data-delete="{{ r.name }}">Delete</button>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4" class="msg">No repositories yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </main>
+  <script>
+    const flash = document.getElementById("flash");
+    async function reloadTable() {
+      const res = await fetch("/ui/api/repos");
+      const data = await res.json();
+      const body = document.getElementById("repo-body");
+      if (!data.repos.length) {
+        body.innerHTML = '<tr><td colspan="4" class="msg">No repositories yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = data.repos.map(r => `
+        <tr data-name="${r.name}">
+          <td><strong>${r.name}</strong></td>
+          <td>
+            <div class="status ${r.status}">${r.status}</div>
+            <div class="msg">${r.message || ""}</div>
+          </td>
+          <td class="msg">${r.git_url}</td>
+          <td class="actions">
+            ${r.has_wiki ? `<a class="btn" href="/r/${r.name}/" target="_blank" rel="noopener">Open wiki</a>` : ""}
+            <button type="button" class="secondary" data-reindex="${r.name}">Reindex</button>
+            <button type="button" class="danger" data-delete="${r.name}">Delete</button>
+          </td>
+        </tr>`).join("");
+      bindActions();
+    }
+    function bindActions() {
+      document.querySelectorAll("[data-reindex]").forEach(btn => {
+        btn.onclick = async () => {
+          flash.textContent = "";
+          const name = btn.getAttribute("data-reindex");
+          const res = await fetch(`/ui/api/repos/${encodeURIComponent(name)}/reindex`, { method: "POST" });
+          const data = await res.json();
+          if (!data.ok) flash.textContent = data.error || "reindex failed";
+          await reloadTable();
+        };
+      });
+      document.querySelectorAll("[data-delete]").forEach(btn => {
+        btn.onclick = async () => {
+          const name = btn.getAttribute("data-delete");
+          if (!confirm(`Delete repo "${name}"?`)) return;
+          flash.textContent = "";
+          const res = await fetch(`/ui/api/repos/${encodeURIComponent(name)}`, { method: "DELETE" });
+          const data = await res.json();
+          if (!data.ok) flash.textContent = data.error || "delete failed";
+          await reloadTable();
+        };
+      });
+    }
+    document.getElementById("add-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      flash.textContent = "";
+      const name = document.getElementById("name").value.trim();
+      const git_url = document.getElementById("git_url").value.trim();
+      const res = await fetch("/ui/api/repos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, git_url }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        flash.textContent = data.error || "failed";
+        return;
+      }
+      e.target.reset();
+      await reloadTable();
+    });
+    document.getElementById("refresh").onclick = () => reloadTable();
+    bindActions();
+    setInterval(reloadTable, 5000);
+  </script>
+</body>
+</html>

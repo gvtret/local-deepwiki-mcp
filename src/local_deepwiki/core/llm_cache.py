@@ -162,12 +162,19 @@ class LLMCache:
         self,
         entry: dict[str, Any],
         label: str,
-    ) -> str:
-        """Record a hit for *entry* and return its response string."""
+    ) -> str | None:
+        """Record a hit for *entry* and return its response string.
+
+        Empty responses are treated as misses so they cannot blank out chat.
+        """
+        response = cast(str, entry.get("response") or "")
+        if not response.strip():
+            logger.debug("Cache %s hit ignored: empty response", label)
+            return None
         self._stats["hits"] += 1
         logger.debug("Cache %s hit: id=%s...", label, str(entry.get("id", ""))[:8])
         await self._record_hit(entry["id"], entry)
-        return cast(str, entry["response"])
+        return response
 
     async def get(
         self,
@@ -211,11 +218,15 @@ class LLMCache:
 
         entry = await self._exact_hash_lookup(table, exact_hash)
         if entry is not None:
-            return await self._deserialize_cached_response(entry, "exact")
+            cached = await self._deserialize_cached_response(entry, "exact")
+            if cached is not None:
+                return cached
 
         entry = await self._similarity_lookup(table, prompt, model_name)
         if entry is not None:
-            return await self._deserialize_cached_response(entry, "similarity")
+            cached = await self._deserialize_cached_response(entry, "similarity")
+            if cached is not None:
+                return cached
 
         self._stats["misses"] += 1
         return None
@@ -242,6 +253,11 @@ class LLMCache:
         # Skip if temperature too high
         if temperature > self.config.max_cacheable_temperature:
             logger.debug("Cache skip set: temperature %s > max", temperature)
+            return
+
+        # Never cache empty answers — they poison similarity hits (chat shows blank).
+        if not (response or "").strip():
+            logger.debug("Cache skip set: empty response")
             return
 
         try:

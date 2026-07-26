@@ -322,8 +322,12 @@ class OpenAILLMProvider(LLMProvider):
                 stream=True,
             )
             async for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                text = getattr(delta, "content", None)
+                if text:
+                    yield text
 
         except (
             ProviderConnectionError,

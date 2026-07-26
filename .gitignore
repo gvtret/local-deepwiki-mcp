@@ -96,3 +96,7 @@ logs/
 # Ruff
 .ruff_cache/
 .worktrees/
+
+# Local generated wiki
+.deepwiki/
+

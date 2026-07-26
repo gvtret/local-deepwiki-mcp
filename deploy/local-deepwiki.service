@@ -1,0 +1,26 @@
+[Unit]
+Description=local-deepwiki MCP HTTP (uvicorn /mcp + /health + /ui)
+After=network-online.target
+Wants=network-online.target
+# LLM via Omniroute (OpenAI-compatible). OPENAI_API_KEY comes from .env.
+
+[Service]
+Type=simple
+User=deploy
+Group=deploy
+WorkingDirectory=/opt/local-deepwiki
+Environment=LOCAL_DEEPWIKI_ROOT=/opt/local-deepwiki
+Environment=LOCAL_DEEPWIKI_HTTP_HOST=0.0.0.0
+Environment=LOCAL_DEEPWIKI_HTTP_PORT=5555
+Environment=LOCAL_DEEPWIKI_PUBLIC_BASE=http://192.168.1.165:5555
+Environment=LOCAL_DEEPWIKI_ALLOWED_ORIGINS=http://192.168.1.165:5555,http://deepwiki.misc-server,http://127.0.0.1:5555
+Environment=LOCAL_DEEPWIKI_SSH_TARGET=deploy@192.168.1.165
+Environment=PATH=/opt/local-deepwiki/.venv/bin:/home/deploy/.local/bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=-/opt/local-deepwiki/.env
+ExecStart=/opt/local-deepwiki/deploy/scripts/run_mcp_http.sh
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

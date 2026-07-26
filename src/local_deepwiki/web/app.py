@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import re as _re
 import sys
 from pathlib import Path
@@ -85,13 +86,32 @@ if _HAS_FLASK:
 # ---------------------------------------------------------------------------
 @app.before_request
 def csrf_check() -> Response | None:
-    """Block cross-origin mutating requests without a matching Origin header."""
+    """Block cross-origin mutating requests without a matching Origin header.
+
+    When served behind the Hub reverse proxy, ``request.host`` is loopback
+    (127.0.0.1:5600) while the browser Origin is the public Hub URL. Accept
+    X-Forwarded-Host / LOCAL_DEEPWIKI_ALLOWED_ORIGINS as well.
+    """
     if request.method in ("POST", "PUT", "DELETE", "PATCH"):
         origin = request.headers.get("Origin")
         if origin:
-            host = request.host_url.rstrip("/")
-            if not origin.startswith(host):
-                logger.warning("CSRF blocked: Origin=%s Host=%s", origin, host)
+            origin_norm = origin.rstrip("/")
+            allowed = {request.host_url.rstrip("/")}
+            xf_host = (request.headers.get("X-Forwarded-Host") or "").split(",")[0].strip()
+            xf_proto = (
+                (request.headers.get("X-Forwarded-Proto") or "http").split(",")[0].strip()
+                or "http"
+            )
+            if xf_host:
+                allowed.add(f"{xf_proto}://{xf_host}".rstrip("/"))
+            for raw in os.environ.get("LOCAL_DEEPWIKI_ALLOWED_ORIGINS", "").split(","):
+                item = raw.strip().rstrip("/")
+                if item:
+                    allowed.add(item)
+            if origin_norm not in allowed:
+                logger.warning(
+                    "CSRF blocked: Origin=%s allowed=%s", origin_norm, sorted(allowed)
+                )
                 abort(403, "Cross-origin request blocked")
     return None
 
@@ -572,7 +592,8 @@ def run_server(
     flask_app = create_app(wiki_path)
     logger.info("Starting DeepWiki server at http://%s:%s", host, port)
     logger.info("Serving wiki from: %s", wiki_path)
-    flask_app.run(host=host, port=port, debug=debug)
+    # threaded=True so chat/codemap SSE and overview LLM calls don't block each other
+    flask_app.run(host=host, port=port, debug=debug, threaded=True)
 
 
 def main() -> None:

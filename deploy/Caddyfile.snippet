@@ -1,0 +1,19 @@
+http://deepwiki.misc-server {
+	redir / /ui
+
+	handle /ui* {
+		reverse_proxy 127.0.0.1:5555
+	}
+
+	handle /mcp* {
+		reverse_proxy 127.0.0.1:5555
+	}
+
+	handle /health* {
+		reverse_proxy 127.0.0.1:5555
+	}
+
+	handle /r/* {
+		reverse_proxy 127.0.0.1:5555
+	}
+}

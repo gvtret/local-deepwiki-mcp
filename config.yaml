@@ -1,0 +1,40 @@
+# Local DeepWiki — Omniroute (OpenAI-compatible) + local embeddings
+# Copied to app root as config.yaml (first search path for Config.load).
+# API key: set OPENAI_API_KEY in .env (never commit secrets).
+
+embedding:
+  provider: "local"
+  local:
+    model: "all-MiniLM-L6-v2"
+
+llm:
+  provider: "openai"
+  openai:
+    model: "auto/best-coding"
+    base_url: "http://omniroute.misc-server/v1"
+
+parsing:
+  languages:
+    - python
+    - typescript
+    - javascript
+    - go
+    - rust
+    - java
+    - c
+    - cpp
+  max_file_size: 1048576
+  exclude_patterns:
+    - "node_modules/**"
+    - "venv/**"
+    - ".venv/**"
+    - ".git/**"
+    - "data/**"
+
+chunking:
+  max_chunk_tokens: 512
+  overlap_tokens: 50
+
+output:
+  wiki_dir: ".deepwiki"
+  vector_db_name: "vectors.lance"
