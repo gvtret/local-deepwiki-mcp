@@ -41,3 +41,14 @@ Living progress log. Last entry = current state.
 **State:** both repos **ready**; Hub + CSRF + streaming chat on server
 
 **Next:** optional git commit of deploy-layer fixes (ask user); Cursor HTTP MCP already at `http://192.168.1.165:5555/ui/mcp/cursor.json`
+
+## 2026-07-26 20:10 — Fork + commit
+
+**Done:**
+- Fork: https://github.com/gvtret/local-deepwiki-mcp (upstream UrbanDiver/local-deepwiki-mcp)
+- Commit `9661cce` on `main`: Hub deploy layer, Config.load ROOT, proxy SSE/CSRF, empty LLM cache harden, chat UI errors
+- Workspace `/home/trgv/local-deepwiki` re-synced to the fork clone (`origin`=fork, `upstream`=UrbanDiver)
+
+**State:** fork pushed; server `/opt/local-deepwiki` unchanged (still running)
+
+**Next:** none required; optional PR upstream or sync server from fork
